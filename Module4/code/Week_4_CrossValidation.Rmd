@@ -1,0 +1,202 @@
+---
+title: "Week 4: Cross Validation"
+author: "Xuan Pham"
+date: "November 12, 2018"
+output: html_document
+---
+
+# Cross Validation 
+
+The packages you will need for this exercise are **caret**, **rpart**, and **rpart.plot**.
+
+##What's the Expected Performance of a Model? 
+
+The best way to measure performance is to know the **true error rate**. The true error rate is calculated by comparing the model's predictions against actual outcomes in the **entire population**.  In reality, we usually are not working with the whole population. We are working with one or more samples from the population; hence, we do not know the true error rate. 
+
+### Naive Approach 
+
+A **naive** way to estimate the true error rate is to apply our model to the entire sample (i.e. training dataset) and then calculate the error rate. The naive approach has several drawbacks:
+
+* Final model will overfit the training data. The problem is magnified when a model has a large number of parameters.  
+
+* Estimated error rate is likely to be lower than the true error rate.  
+
+A better approach than the naive method is **resampling**.   
+
+
+### Resampling   
+
+Resampling refers to drawing repeated samples from the sample(s) we have. The goal of resampling is to gauge performances of competing models. *Resampling is our attempt to simulate the conditions needed to calculate the true error rate.*  
+
+Four major resampling methods:  
+
+1. one-fold cross validation  
+
+2. k-fold cross validation & repeated k-fold cross validation  
+
+3. leave-one-out cross validation  
+
+4. bootstrapping    
+
+
+### One-Fold Cross Validation
+
+We touched on the validation set approach in the first few weeks of class. In particular, the validation set approach involves randomly dividing the known observations into two subgroups: a) a **training set** and b) a **validation set**. We fit our model with the training set and then tests the model's performance on the validation set. Common splits include 60-40 (60% training set and 40% validation set), 70-30, and 80-20. In the discussion of decision trees above, we used an 80-20 one-fold cross validation for the opioid prescribers problem.
+
+
+In one fold cross validation, we have an estimated error rate that has high bias & variance. The way around the bias-variance tradeoff problem is by using **k-fold cross validation**. 
+
+![bias variance tradeoff](https://sebastianraschka.com/images/blog/2016/model-evaluation-selection-part2/visual_bias_variance.png)
+
+
+##### k-Fold Cross Validation
+
+k-fold cross validation is a resampling technique that divides the dataset into k groups, or folds, of equal size. Here is how it works:  
+
+1. Keep one fold as the validation set. Fit the model on the other k-1 folds.  
+
+2. Test fitted model on the validation set. Calculate the mean squared error (MSE) on the validation set. 
+
+3. Repeat Steps 1 & 2 over and over again so that a different fold is used as a validation set. **The true error rate is estimated as the average error rate of all repetitions.**  
+
+Use the **caret** package for this task.  
+
+First, let's import the prescribers data set in from last week.  
+
+```{r opioid.data.prep}
+prescribers<-read.csv("~/Dropbox/Spring_2018/BIA_6301_BCA/Week_3/prescribers.csv")
+ 
+prescribers<-prescribers[,c(241,1:240,242:331)] #Rearranging the columns so that our target variable is first
+
+table(prescribers$Opioid.Prescriber) #view the distribution of opioid vs. non-opioid prescribers
+
+prescribers$Male <-ifelse(prescribers$Gender=="M",1,0) #if Male = 1; if Female=0.
+prescribers<-prescribers[,-2] #We do not need the Gender variable anymore so delete it.
+
+dim(prescribers)
+
+table(prescribers$Opioid.Prescriber)
+
+library(caret)
+set.seed(123) #ensures we get the same train/valid set.
+
+trainIndex <- createDataPartition(prescribers$Opioid.Prescriber, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+prescribers_train <- prescribers[ trainIndex,]
+prescribers_valid  <- prescribers[-trainIndex,]
+```
+
+
+Next, we will divide the training set into 10-folds. Each fold will eventually be used as a validation set. 
+
+
+```{r kfoldcv}
+#library(caret)
+fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+set.seed(123)
+prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+prescribers_10folds
+```
+
+We can also use the kappa statistic to train a model.  
+
+```{r kfoldcv.kappa}
+#fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+#set.seed(123)
+#prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Kappa", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+#prescribers_10folds
+```
+
+Let's see what the final model looks like:
+
+```{r cvrpartfinal1}
+library(rpart.plot)
+prescribers_10folds$finalModel
+rpart.plot(prescribers_10folds$finalModel)
+```
+
+Now we calculate the error rate of the chosen decision tree on the validation set. 
+
+```{r kfoldcv.rpart}
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_10folds$finalModel, newdata = prescribers_valid[-1], type="class")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+Notice that the accuracy rate of the decision tree model chosen through 10-fold cross validation is 72.7%. The decision tree model from last week using a one-fold (80-20 split) cross validation was 75.84%. 
+
+k-fold cross validation is still problematic, however. Vanwinckelen and Blockeel (2011) noted:  
+
+*In addition to bias, the results of a k-fold cross-validation also have high variance. If we run two different tenfold cross-validations for the same learners on the same data set S, but with different random partitioning of S into subsets S(i), these two cross-validations can give quite different results. An estimate with smaller variance can be obtained by repeating the cross-validation several times, with different partitionings, and taking the average of the results obtained during each cross-validation* (page 2).
+
+
+##### Repeated k-fold Cross Validation
+
+Repeated k-fold cross validation "repeats" the k-fold cross validation over and over again and stops at some prespecified number of times. 
+
+```{r repeatedkfoldcv}
+fitControl <- trainControl(method="repeatedcv", number=10, repeats=5) #10-fold cross validation #repeated 5 times.
+
+set.seed(123)
+prescribers_10folds_rp<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+prescribers_10folds_rp
+
+prescribers_10folds$finalModel
+rpart.plot(prescribers_10folds$finalModel)
+
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_10folds_rp$finalModel, newdata=prescribers_valid[-1], type="class")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+
+##### Leave-one-out Cross Validation (LOOCV)
+
+Repeated k-fold cross validation can help reduce the high variance problem, but we still have to deal with the high bias problem. A way to minimize the bias problem is to do LOOCV. The technique is a degenerate case of k-fold cross validation, where K is chosen as the total number of observations. LOOCV uses all observations as the training set and leaves one observation out as the validation set. The process repeats until all observations have been used as a validation set.
+
+LOOCV is very computationally intensive!!
+
+```{r loocv}
+
+#fitControl <- trainControl(method="LOOCV") #10-fold cross validation
+
+#set.seed(123)
+#prescribers_loocv<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+#prescribers_loocv
+#prescribers_loocv$finalModel
+#rpart.plot(prescribers_loocv$finalModel)
+
+#actual <- prescribers_valid$Opioid.Prescriber
+#predicted <- predict(prescribers_loocv$finalModel, newdata=prescribers_valid[-1], type="class")
+#results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+#print(results.matrix)
+```
+
+##### Bootstrapping 
+
+Bootstrapping is a resampling technique that obtain distinct datasets by repeatedly sampling observations from the original dataset with replacement. 
+
+Each boostrapped dataset is created by sampling with replacement and is the same size as the original dataset. Consequently, some observations may appear more than once in a given boostrapped dataset while other observations may not appear at all.
+
+Note: The default method in the train() function in the caret package is the bootstrap.
+
+```{r bootstrap}
+cvCtrl <- trainControl(method="boot", number=10) #10 bootstrapped samples.
+set.seed(123)
+prescribers_bootstrap<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=cvCtrl)
+prescribers_bootstrap
+prescribers_bootstrap$finalModel
+rpart.plot(prescribers_bootstrap$finalModel)
+
+
+actual <- prescribers_valid$Opioid.Prescriber
+predicted <- predict(prescribers_bootstrap$finalModel, newdata=prescribers_valid[-1], type="class")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```

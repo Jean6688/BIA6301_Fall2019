@@ -1,0 +1,310 @@
+---
+title: 'Week 5: Principal Components Analysis'
+author: "Xuan Pham"
+date: "November 19, 2018"
+output: html_document
+---
+
+## Getting Started
+
+You will need to install the following packages to follow along with the discussion: **ggplot2**, **ggrepel**, and **pls**.
+
+### Food for Thought
+
+Take a look at this chessboard. The board is two dimensional. The length (and width) has eight "spots," so the board has a total of $8*8 = 64$ spots. A chess piece can only be located at one spot among the 64 options. Furthermore, the nearest neighboring chess piece is somewhere in the other 63 location options.  
+
+Now imagine that we expand the chessboard to a third dimension, the flat plane would become a cube. The location options would increase to $8*8*8=512$. Since a given chess piece can only be located in one spot, the nearest neighboring chess piece is somewhere in the other 511 location options.  
+
+If we can increase the cube into the fourth dimension, we would get a [tesseract](https://en.wikipedia.org/wiki/Tesseract) and that would increase the location options to $8*8*8*8=4096$! The nearest neighboring chess piece is now in the other 4,095 location options. In another word, the nearest neighbor is now no longer meaningful. It can be just about any random chess piece.  
+
+Note: Refer to [Domingos 2010](https://homes.cs.washington.edu/~pedrod/papers/cacm12.pdf) for a more complete discussion.     
+
+![chessboard](https://upload.wikimedia.org/wikipedia/commons/4/4a/AAA_SVG_Chessboard_and_chess_pieces_04.svg)
+
+### So How Does Any of This Matter to Data Mining?  
+
+The dimension of a model is equivalent to the number of predictors. When we add more predictors, we are increasing the dimension of the model. Patterns and structures that we want to find via any model become a harder and harder task because the data space becomes increasingly sparse. We have less and less number of observed cases in our training set to "train" any model. In another word, there is now too much noise for us to parse through to find useful information.  This problem is called the **curse of dimensionality**.  
+
+### Related Problems  
+
+We have seen in the past few weeks that we create many new variables (think dummy variables and new forms of existing variables) in the data preprocessing stage. Problems exist when we create new variables:  
+
+*New variables are correlated with existing variables. If we use all the variables in a linear regression model, we run into a problem called multicollinearity. Multicollinearity exists when we cannot separate out the effect of one predictor from another predictor.  
+
+*Including correlated predictors or predictors that are not related to the target variable can also lead to overfitting.  
+
+*Superflous variables can also increase computational costs.  
+
+### What Do We Do?  
+
+What if we could obtain a reduced representation of the data set that is much smaller in volume but yet produces the same (or almost the same) analytical results? We could:  
+
+* Avoid the curse of dimensionality  
+* Help eliminate irrelevant features and reduce noise  
+* Reduce time and space required in data mining  
+* Allow easier visualization  
+
+There are many ways to reduce the dimension of a data set:  
+
+1. Combine categories to reduce the number of required dummy variables.  
+2. Find a median or mean value to represent a category, and, thus, "covert" the categorical variable into a numeric variable.  
+3. Use principal components analysis. 
+
+The first method is called **principal components analysis** or **PCA**. PCA is intended to be done on a data set prior to applying a model. PCA is part of the data preprocessing stage, so it does not consider the target variable at all.   
+
+# Principal Components Analysis (PCA)
+
+The PCA approach to dimension reduction posists that there exists some weighted linear combinations of the original variables that explain the majority of information of the original data set. We want to find those weighted linear combinations!  
+
+## Let's Start with an Example  
+
+```{r import}
+Cereals <- read.csvCereals <- read.csv("~/Desktop/Cereals.csv")
+Cereals<- na.omit(Cereals) #remove NA's
+
+row.names(Cereals) <- Cereals$name
+cereals.complete <-Cereals[,-1]
+```
+
+```{r import.reduced}
+names(cereals.complete)
+      
+cereals <- cereals.complete[,-c(1:2,11:12)] #remove categorical variables: mfr, type, vitamins, shelf
+```
+
+Let's begin with a simple example. Imagine that we have a smaller data set of only two variables: **calories** and **rating**. The rating variable shows Consumer Reports ratings for each cereal's "heathiness". (Ignore all the other variables for now.)  
+
+First, let's look at the mean for each variable.
+
+```{r mean}
+mean(cereals$calories)
+mean(cereals$rating)
+```
+Let's look at the variance of each variable.  
+
+```{r varcovmatrix}
+var(cereals$calories)
+var(cereals$rating)
+```
+
+We see that the total variance of both variables is 394 + 197 = 590. **calories** accounts for $\frac{394}{590}=67\%$ of the total variability, and **rating** accounts for the other $33\%$ of the total variability. If we have to reduce the dimension of our two variables data set down to one variable, we would lose at least $33\%$ of the total variability.  
+
+Is there a better way to do dimension reduction that would allow us to lose less than 34% of the total variability?  
+
+### A Visual Representation  
+
+The scatter plot below shows calories versus rating on a two dimensional plane. Now if we have to reduce the dimension of the data set down to one dimension (from a plane down to a line), then the red line would capture the most variability in the data set. We make the assumption that the red line would preserve the most amount of variance in the original data set, and, hence, would retain the most information in the original two variables data set. At the same time, the red line is also the closest (of all the possible lines) to the actual observations (i.e. minimizing the sum of squared Euclidean distances). These are two unique characteristics of this red line. In the parlance of PCA, we call this red line the **first principal component**. Thus, the first principal component is a linear projection that captures the most variability (and, thus, information) in the original data set.  
+
+
+```{r scatterplot.pc1}
+plot(cereals$calories, cereals$rating, xlim=c(0,200), ylim=c(0,120))
+segments(75,100,125,5, col="red")
+```
+
+There also exists another line that contains the second largest amount of variance, and, yet, uncorrelated to the red line. As you can see below, the blue line is perpendicular to the red line. In technical terminology, we call the blue line "orthogonal" to the red line. The blue line represents the second principal component.  
+
+```{r scatterplot.pc2}
+plot(cereals$calories, cereals$rating, xlim=c(0,200), ylim=c(0,120), xlab="calories", ylab="rating", 
+     main="Scatter Plot of Calories vs. Rating With Two Principal Component Directions")
+segments(75,100,125,5, col="red")
+segments(75,20,130,50, col="blue")
+```
+
+Instead of trying to "guess" where the first and second principal components are on a scatter plot, R can find the exact linear projections for us.  
+
+```{r prcomp2}
+
+pcs <- prcomp(data.frame(cereals$calories,cereals$rating))
+
+summary(pcs)
+```
+
+The above output tells us that there are two principal components. The first principal component is a linear projection that accounts for $86.71\%$ of the total variance in the data set. The second principal component is an orthogonal linear projection that accounts for the other $13.29\%$ of the total variance.  
+
+The barplot below shows the same information.  
+
+```{r prcomp2.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+```{r prcomp2.loadings}
+pcs$rotation
+```
+
+The rotation matrix gives us the weights, which are usually called **loadings**, used to project the original data points onto the first and second principal component directions. The loadings for the first principal component are $(0.853,-0.522)$, and the loadings for the second principal component are $(0.522, 0.853)$.  So how do we use the loading values?  
+
+Here is an example for the first cereal, 100% Bran, with 70 calories and a rating of 68.4:  
+
+$score_{pca.1}=0.853*(70-107.027)+(-0.523)*(68.4-42.372)=-45.197$
+$score_{pca.2}=0.522*(70-107.027)+(0.853)*(68.4-42.372)=2.874$
+
+The first calculation shows the **score** for the 100% Bran cereal projected onto the first principal component line.  The second calculation shows the **score** for the 100% Bran cereal projected onto the second principal component line. We should also note that the calories (and rating) value is subtracted from its mean prior to multiplying on the loading value.     
+
+We can also ask R to give us these scores. Notice the scores are more accurate than our calculations above.   
+
+```{r prcomp.2.scores}
+
+scores<-pcs$x
+head(scores,5)
+```
+
+#### Reaching a Conclusion  
+
+As we have learned, the first principal component explains 86% of the variability in the data set. If we are to reduce our two dimensional data set down to one dimensional, we would use the first principal component. 
+
+### Extending to the 11th-Dimensional Cereals Data Set
+
+We can apply PCA to the entire cereals data set, provided that the following rules are followed:  
+
+*PCA only works on numeric variables.  
+*PCA does not work with missing values.  
+*Normalize the data set before performing PCA.  
+
+
+Here is an example of PCA where we have not normalized the data set. 
+
+
+```{r prcomp.all}
+pcs<-prcomp(cereals)
+summary(pcs)
+```
+
+```{r prcomp.all.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+```{r prcomp.all.loadings}
+pcs$rotation
+```
+
+Notice that PC1 is dominated by sodium, which has a loading of 0.987. Furthermore, PC2 is dominated by potassium, which has a loading of -0.987. [Please note that the sign does not matter in PCA. We care about the magnitude.] Since both sodium and potassium are measured in milligrams while other variables are measured in grams or some other scale, the sodium and potassium variables have larger variances than the other variables. Hence, sodium and potassium are dominating in PCA.  
+
+Now let's see what PCA looks like when we normalize the data set first.  
+
+```{r prcomp.norm.all}
+pcs<-prcomp(cereals, scale. = T) #use scale option to z-normalize data set. 
+summary(pcs)
+```
+
+```{r prcomp.norm.all.varexp}
+pcs.variance.explained <-(pcs$sdev^2 / sum(pcs$sdev^2))*100
+barplot(pcs.variance.explained, las=2, xlab="Principal Component", ylab="% Variance Explained", main="Principal Components versus Percent of Variance Explained")
+```
+
+
+We note that the first two principal components only explain $64\%$ of the variability after we normalized the data set. When we applied PCA without normalizing the variables, we found that the first two principal components explained $96\%$ of the variability. 
+
+#### Picking the Number of Principal Components
+
+There is no right way to pick the number of principal components to represent the original data set. We want to choose the number of PCs that contains a large amount of variability in the original data set. "Large amount" is also difficult to pin down. Some people use arbitrary cut off values like 85% or 90%, but there's no theoretical basis for any of these decisions.  
+
+A "rule of thumb" approach does exist to help find the number of PCs. It is the familiar elbow method.  
+
+```{r screeplot}
+screeplot(pcs, type="line")
+```
+
+In the above screeplot, we would choose the number of PCs around the elbow, which is at 4 PCs.  
+
+#### Making Sense of the Principal Component Loadings
+
+How can we use the principal components to understand the structure of the cereals data set? Let's see! 
+
+```{r prcomp.norm.all.loadings}
+pcs$rotation
+```
+
+PC1: Large positive loadings for calories, sugars, and cups. Large negative loadings for fiber, protein, potassium, and rating. PC1 is balancing among all of these variables. These are the variables that are most important in PC1. (Remember the sign of each loading value does not matter. We are looking for magnitude!)
+
+PC2: Variables dominate PC2 are calories, fat, fiber, sugars, potassium, and weight. 
+
+PC3: Variables dominate PC3 are weight, calories, fat, sugars, and potassium. 
+
+PC4: Variables dominate PC4 are carbohydrates, prtein, and sodium. 
+
+...and so on...
+
+
+If we plot the first two principal components against each other, can we find anything interesting? 
+
+```{r scores, fig.width=16}
+scores<-as.data.frame(pcs$x)
+
+library(ggplot2)
+library(ggrepel)
+ggplot(scores) +
+  geom_point(aes(PC1, PC2), color = 'red') +
+  geom_text_repel(aes(PC1, PC2, label = rownames(scores))) +
+  theme_classic(base_size = 16)
+
+
+ggplot(scores) +
+  geom_point(aes(PC2, PC3), color = 'red') +
+  geom_text_repel(aes(PC1, PC2, label = rownames(scores))) +
+  theme_classic(base_size = 16)
+```
+We can see that as we move from left to right, the cereals become less and less healthy and more "sugary". Also, if we move from bottom to top, the cereals become heavier. 
+
+
+
+### Another Practical Application of PCA: Principal Components Regression  
+
+Principal components can also be used as predictors in a linear regression model. The idea is that a small number of principal components that explain most of the variability in the data set also can be used to predict the target variable. A principal component regression (PCR) model would be less likely to suffer from multicollinearity. PCR is most appropriate when a few PCs capture most of the variation in the predictors. Otherwise, we should use least squares regression. Let's look at an example! 
+
+We want to predict cereal's rating using the known numeric predictors. Using PCR, we would need to first split the data set into a training set and a test set. We then standardize the data set and then apply PCA analysis. For each combination of principal components, we create a separate regression model of the form:  
+
+$Y = z_{1} + z_{2} + ... + z_{m}$ where $m < p$  
+
+$Y$ is the target  
+
+$z_{1}, z_{2},...$ are the principal component projections  
+
+$m$ are the principal components and $p$ are the number of predictors in the original data set 
+
+We can use cross validation to further compute the prediction error for each combination of $z_{m}$.
+
+```{r pcr.cereals}
+#notice that the train-test split is different from what we have seen
+set.seed(123)
+train<-sample(1:nrow(cereals),59) #80% train
+test<-(-train) #20% test
+
+library(pls)
+set.seed(123)
+pcr.fit <- pcr(rating~.,data=cereals,subset=train,scale=TRUE,validation="CV")
+
+summary(pcr.fit)
+```
+
+
+In the above output, we can see that we have to contend with two choices when deciding the right number of principal components to use as predictors: 1) the cross validation prediction error [which is measured as the root mean squared prediction error or RMSEP by default] and 2) the percentage of total variance explained by the principal components. Although the smallest cross validation RMSEP occurs when the PCR model uses 10 principal components and the percentage of total variance explained is $99.5\%$, this would give us a regression model that is not much simpler than if we had just gone with the least squares approach. 
+
+Let's try again! Look at the 3rd principal component where 73% of the total variance is explained and the RMSEP is 5.055. Here's a visualization:  
+
+```{r valplot}
+validationplot(pcr.fit, val.type="RMSEP") # other options include MSEP & R2
+```
+
+We could use the first 3 principal components as predictors for our PCR model.  
+
+```{r pcr.cereals.test}
+pcr.pred <- predict(pcr.fit, cereals[test,], ncomp=3)
+pcr.pred.df <- as.data.frame(pcr.pred)
+pcr.pred.df$actual.rating <- cereals[test,11]
+
+MSEP<-mean((pcr.pred.df$`rating.3 comps`-pcr.pred.df$actual.rating)^2)
+RMSEP <- sqrt(MSEP)
+print(MSEP)
+print(RMSEP)
+
+```
+
+Our PCR model did not do too poorly. The root mean squared prediction error for rating in the test set is 3.27.
+
+##References  
+
+Gareth, James and et al. (2013). An Introduction to Statistical Learning with Applications in R. New York: Springer.  
+
+Shmueli, Galit and et al (2018). Data Mining for Business Analytics: Concepts, Techniques, and Applications in R. Hoboken: Wiley. Chapter 6.  

@@ -1,0 +1,223 @@
+---
+title: 'Week 7: Ensemble and Uplift Models'
+author: "Xuan Pham"
+date: "December 3, 2018"
+output: html_document
+---
+
+# Getting Started  
+
+The packages you will need for this week are **caret**, **rpart**, **rpart.plot**, **randomForest**, **adabag**, and **uplift**. 
+
+## Decision Tree Model Redux  
+
+Returning to the Universal Bank data set
+
+```{r import.ub}
+bank.df <- read.csv("C:/Users/PhamX/Dropbox/Fall_2018/BIA_6301/Week_3/UniversalBank.csv")
+bank.df <- bank.df[ , -c(1, 5)]  # Drop ID and zip code columns.
+```
+
+Splitting the sample into 80% training set and 20% validation set
+
+```{r bc.split}
+library(caret)
+set.seed(123)
+trainIndex <- createDataPartition(bank.df$Personal.Loan, p = .8,list = FALSE,times = 1)
+head(trainIndex)
+train.set <- bank.df[trainIndex,]
+validate.set <- bank.df[-trainIndex,]
+```
+
+
+
+### Steps 7, 8 & 9: Choose & implement the data mining techniques to be used. Interpret the results. 
+
+```{r DT}
+library(rpart)
+library(rpart.plot)
+DT.model <- rpart(train.set$Personal.Loan~., method="class", parms = list(split="gini"), data=train.set)
+
+rpart.plot(DT.model, type=1, extra=101)
+
+actual <- validate.set$Personal.Loan
+predicted <- predict(DT.model,validate.set, type="class")
+results.matrix <- confusionMatrix(predicted, actual, positive="Yes")
+print(results.matrix)
+```
+
+## What would have happened if we had create a different train/validation set? 
+
+Notice that this tree looks slightly different from the previous tree when the set.seed value was 123. The confusion matrices are also different. 
+
+```{r alternate}
+set.seed(456)
+trainIndex2 <- createDataPartition(bank.df$Personal.Loan, p = .8,list = FALSE,times = 1)
+train.set2 <- bank.df[trainIndex2,]
+validate.set2 <- bank.df[-trainIndex2,]
+
+DT.model2 <- rpart(train.set2$Personal.Loan~., method="class", parms = list(split="gini"), data=train.set2)
+
+rpart.plot(DT.model2, type=1, extra=101)
+
+actual2 <- validate.set2$Personal.Loan
+predicted2 <- predict(DT.model2,validate.set2, type="class")
+results.matrix2 <- confusionMatrix(predicted2, actual2, positive="Yes")
+print(results.matrix2)
+```
+
+## Improving Model Performance: Ensemble Models Approach
+
+One decision tree suffers from high variance. The resulting tree depends on the training data. What we want is a procedure with low variance--meaning we should see similar error estimates if the tree is applied repeatedly to distinct datasets. We will examine three ensemble models that are built on the basic decision trees:
+
+1. Bagging (bootstrap aggregation)  
+2. Random forests (many trees = a forest)  
+3. Boosting
+
+### Bagging
+
+Bagging is a 4 step process:  
+
+1. Generate B bootstrapped samples from the training set:  
+    -Draw an observation from the training set.  
+    -Record observation in the bootstrapped sample.  
+    -Return observation to the training set. Draw another observation to incude in the bootstrapped sample.  
+    -Repeat this process until bootstrapped sample size equals the size of the training set.  
+    -Repeat the above steps over and over again until a desired number of B bootstrapped samples are created. 
+
+2. Construct decision trees for all B bootstrapped samples.  
+
+3. For each given test observation, we record the class predicted by each of the B trees.  
+
+4. The overall prediction is the most commonly occuring class among the B predictions. Majority voting wins.
+
+Bagging averages many trees so it reduces the variance of the instability of generating just one tree. Bagging leads to improved prediction. The tradeoff is you lose interpretability and the ability to see simple structure in a tree.
+
+
+```{r bagging}
+library(randomForest)
+set.seed(123) 
+
+bagging.model <- randomForest(Personal.Loan ~.,data=train.set, mtry=11, method="class", ntree=500,na.action = na.omit, importance=TRUE) 
+#default number of tree is 500
+#mtry is the number of predictors to consider at each split. All 11 predictors will be considered.
+```
+
+### Out of Bag (OOB) Error
+
+A note on the out-of-bag (OOB) error is warranted. OOB is a measure of the error rate popular in tree algorithms that use bootstrapping. Gareth et al. (2013) explained OOB as follows:
+
+
+Recall that the key to bagging is that trees are repeatedly fit to bootstrapped subsets of the observations. One that can show that **on average, each bagged tree makes use of around two-thirds of the observations. The remaining one-third of the observations not used to fit a given bagged tree are referred to as out-of-bag (OOB) observations.** We can predict the response for the ith observation using each of the trees in which that observation was OOB. This will yield around B/3 predictions for the ith observation. In order to obtain a single prediction for the ith observation, we take majority vote. This lead to a single OOB prediction for the ith observation. An OOB prediction can be obtained in this way for each of the n observations, from which the overall OOB classification error can be computed. The resulting OOB error is a valid estimate of the test error for the bagged model, since the response for each observation is predicted using only the trees that were not fit using that observation....**It can be shown that with B sufficiently large, OOB error is virtually equivalent to leave-one-out cross-validation error**"(p. 317-318).
+
+
+```{r bc.oob}
+print(bagging.model) #note the "out of bag" (OOB) error rate. 
+```
+
+### What are the important predictors in our bagging model? 
+
+Look at the mean decrease in accuracy of predictions in the OOB samples when a given variable is excluded.
+
+```{r predictors}
+importance(bagging.model, type=1)
+```
+
+Look at the mean decrease in node impurity resulting from splits over that variable.  
+
+```{r predictors.2}
+importance(bagging.model, type=2)
+varImpPlot(bagging.model)
+```
+
+```{r bagging.cm}
+actual <- validate.set$Personal.Loan
+predicted <- predict(bagging.model, newdata=validate.set, type="class") 
+CM <- confusionMatrix(predicted, actual, positive="Yes") 
+print(CM)
+```
+
+
+## Random Forest
+
+Random forests consider only a subset of the predictors at each split. This means the node splits are not dominated by one or a few strong predictors, and, thus, give other (i.e. less strong) predictors more chances to be used. When we average the resulting trees, we get more reliable results since the individual trees are not dominated by a few strong predictors.
+
+```{r bc.rf}
+RF.model <- randomForest(Personal.Loan ~.,data=train.set, mtry=3, ntree=500,na.action = na.omit, importance=TRUE) #default to try 3 predictors at a time and create 500 trees. 
+print(RF.model) 
+importance(RF.model) 
+varImpPlot(RF.model) 
+
+actual <- validate.set$Personal.Loan 
+predicted <- predict(RF.model, validate.set, type="class") 
+CM <- confusionMatrix(predicted, actual, positive="Yes") 
+print(CM)
+```
+
+
+## Boosting
+
+The boosting model involves:
+
+-We fit a decision tree to the entire training set.     
+
+-We "boost" the observations that were misclassified by increasing their probabilities of being selected into a revised training set.    
+
+-We fit another decision tree model using the boosted sample.  
+
+The steps above are repeated multiple times.  Note that the trees are that built later depend greatly on the trees already built. Learning slowly has shown to improve model accuracy while holding down variability.
+
+```{r bc.boost}
+library(adabag) #a popular boosting algorithm
+set.seed(123)
+boosting.model <- boosting.cv(Personal.Loan ~.,data=train.set, boos=TRUE, v=10, mfinal=100) 
+#.cv is adding cross validation. Default is v=10 for 10-folds.
+#mfinal is the number of iterations to run
+#Also, this take a while to run.
+boosting.model$confusion #confusion matrix for boosting
+boosting.model$error #error rate for boosting (OOB)
+1-boosting.model$error #accuracy rate for boosting (OOB)
+```
+
+
+## Uplift Model 
+
+Uplift is defind as "the increase in propensity of favorable opinion after receiving message" (Shmueli et al 2018, p. 321). Uplift model is popular for marketers and political campaigns alike. Here is how an uplift model works (Shmueli et al 2018, p. 321):  
+
+1. Randomly divide a sample into a treatment and control group. The treatment group receives a message, and the control group receives nothing. Collect desired behavior/action from individual in each group. Record the results in a new column (i.e. target variable). This is the traditional A-B testing.  
+2. Recombine the data sample. Partition the sample into a training and validation set. Build predictive models as usual. Each model's target variable is the desired result/behavior information. Each model should include a predictor indicating whether the treatment was applied to the individual or not.  
+3. "Score" the predictive model on the validation set. For each individual in the validation set, record the prediction made by each model.  
+4. Reverse the value of the treatment variable and re-score the same model on the validation set. This will yield for each validation record its propensity of success had it received the opposite treatment.  
+5. Uplift is estimated as follows: P(Success|Treatment=1) - P(Success|Treatment=0)  
+
+The chosen uplift model is then applied to new data:  
+1. Include a synthetic predictor variable for a desired treatment for each new observation. Score the model on the new data.  
+3. Reverse the predictor variable value for each observation. Score the model again. 
+4. Estimate uplift. 
+5. Apply treatment for observations meeting some cutoff uplift value. 
+
+The treatment with the higher uplift wins! (p)
+
+
+```{r uplift}
+voter.df <- read.csv("C:/Users/PhamX/Dropbox/Fall_2018/BIA_6301/Week_7/Voter-Persuasion_0.csv", header=TRUE)
+str(voter.df)
+# transform variable MOVED_AD to numerical
+voter.df$MOVED_AD_NUM <- ifelse(voter.df$MOVED_AD == "Y", 1, 0)
+
+set.seed(123)
+trainIndex <- createDataPartition(voter.df$MOVED_AD_NUM, p = .8,list = FALSE,times = 1)
+head(trainIndex)
+train.df <- voter.df[trainIndex,]
+valid.df <- voter.df[-trainIndex,]
+
+# use upliftRF to apply a Random Forest model. 
+
+library(uplift)
+up.fit <- upliftRF(MOVED_AD_NUM ~ AGE + NH_WHITE + COMM_PT + H_F1 + REG_DAYS+ PR_PELIG + E_PELIG + POLITICALC  + trt(MESSAGE_A),
+data = train.df, mtry = 3, ntree = 100, split_method="ED",verbose = TRUE)
+pred <- predict(up.fit, newdata = valid.df)
+uplift.preds <- data.frame(pred, "uplift" = pred[,1] - pred[,2])
+# first colunm: p(y | treatment) 
+# second colunm: p(y | control) 
+```
